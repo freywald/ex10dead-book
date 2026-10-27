@@ -1,0 +1,133 @@
+#!/bin/bash
+
+function local_exit_failsafe() { __exit_failsafe; exit 1; }
+
+load_configuration_file() {
+	local file="$1"
+
+	if [[ ! -f "$file" ]]; then
+		__error "configuration file not found: %s" "$file"
+		local_exit_failsafe
+	fi
+
+	if ! command -v "yq" >"/dev/null"; then
+		__error "yq is required to read %s" "$file"
+		local_exit_failsafe
+	fi
+
+	local status=0
+	local json
+	json="$(expand -t "4" -- "$file" | yq --output-format=json "." )" || status="$(abort_on_interrupt "$?")"
+	if (( status != 0 )); then
+		return "$status"
+	fi
+
+	local value
+
+	# captions
+	if jq --exit-status '.captions | has("default_output_image_size_in_pixels_x")' <<<"$json" >"/dev/null"; then
+		default_output_image_size_in_pixels_x="$(jq --raw-output '.captions.default_output_image_size_in_pixels_x' <<<"$json")"
+	fi
+	if jq --exit-status '.captions | has("default_output_image_size_in_pixels_y")' <<<"$json" >"/dev/null"; then
+		default_output_image_size_in_pixels_y="$(jq --raw-output '.captions.default_output_image_size_in_pixels_y' <<<"$json")"
+	fi
+	if jq --exit-status '.captions | has("line_scale_factor")' <<<"$json" >"/dev/null"; then
+		line_scale_factor="$(jq --raw-output '.captions.line_scale_factor' <<<"$json")"
+	fi
+	if jq --exit-status '.captions | has("font_size_caption_height_ratio_scale_factor")' <<<"$json" >"/dev/null"; then
+		font_size_caption_height_ratio_scale_factor="$(jq --raw-output '.captions.font_size_caption_height_ratio_scale_factor' <<<"$json")"
+	fi
+	if jq --exit-status '.captions | has("font_size_caption_height_ratio_scale_factor_fine")' <<<"$json" >"/dev/null"; then
+		font_size_caption_height_ratio_scale_factor_fine="$(jq --raw-output '.captions.font_size_caption_height_ratio_scale_factor_fine' <<<"$json")"
+	fi
+	if jq --exit-status '.captions | has("engine_use_pando")' <<<"$json" >"/dev/null"; then
+		engine_use_pando="$(jq --raw-output '.captions.engine_use_pando' <<<"$json")"
+	fi
+	if jq --exit-status '.captions | has("automatically_wrap_long_lines")' <<<"$json" >"/dev/null"; then
+		automatically_wrap_long_lines="$(jq --raw-output '.captions.automatically_wrap_long_lines' <<<"$json")"
+	fi
+	if jq --exit-status '.captions | has("default_font_size")' <<<"$json" >"/dev/null"; then
+		default_font_size="$(jq --raw-output '.captions.default_font_size' <<<"$json")"
+	fi
+	if jq --exit-status '.captions | has("gallery_template")' <<<"$json" >"/dev/null"; then
+		gallery_template="$(jq --raw-output '.captions.gallery_template // ""' <<<"$json")"
+	fi
+
+	if jq --exit-status '.captions | has("bibliography_name")' <<<"$json" >"/dev/null"; then
+		bibliography_name="$(jq --raw-output '.captions.bibliography_name // ""' <<<"$json")"
+	fi
+	if jq --exit-status '.captions | has("bibliography_sources_path")' <<<"$json" >"/dev/null"; then
+		bibliography_sources_path="$(jq --raw-output '.captions.bibliography_sources_path // ""' <<<"$json")"
+	fi
+
+	if jq --exit-status '.captions | has("captioned_images_directory")' <<<"$json" >"/dev/null"; then
+		captioned_images_directory="$(jq --raw-output '.captions.captioned_images_directory // ""' <<<"$json")"
+		captioned_images_directory="$(__right_normalize_absolute_path "$captioned_images_directory/$build_for_language/")"
+	fi
+	if jq --exit-status '.captions | has("link_base_directory")' <<<"$json" >"/dev/null"; then
+		link_base_directory="$(jq --raw-output '.captions.link_base_directory // ""' <<<"$json")"
+		link_base_directory="$(dirname -- "$link_base_directory/")/$(basename -- "$link_base_directory") ($build_for_language)/"
+		link_base_directory="$(__right_normalize_absolute_path "$link_base_directory/")"
+	fi
+	if jq --exit-status '.captions | has("text_font_full_file_path")' <<<"$json" >"/dev/null"; then
+		text_font_full_file_path="$(jq --raw-output '.captions.text_font_full_file_path // ""' <<<"$json")"
+	fi
+
+	# default_variants is a yaml array; join to a string and force 100 first
+	if jq --exit-status '.captions | has("default_variants")' <<<"$json" >"/dev/null"; then
+		local joined=""
+		while IFS= read -r value; do
+			[[ -n "$value" ]] && joined+="$value "
+		done < <(jq --raw-output '.captions.default_variants[]? // empty' <<<"$json" || __expression_may_fail)
+		joined="${joined%" "}"
+		# ensure 100 is present and first
+		joined="${joined//"100"/}"
+		joined="$(echo "$joined" | tr -s ' ' | sed 's/^ //;s/ $//')"
+		default_variants="100 $joined"
+	fi
+
+	# pdf
+	if jq --exit-status '.pdf | has("metadata_file")' <<<"$json" >"/dev/null"; then
+		metadata_file="$(jq --raw-output '.pdf.metadata_file // ""' <<<"$json")"
+	fi
+	if jq --exit-status '.pdf | has("temporary_directory")' <<<"$json" >"/dev/null"; then
+		temporary_directory="$(jq --raw-output '.pdf.temporary_directory // ""' <<<"$json")"
+	fi
+	if jq --exit-status '.pdf | has("cover_pdf_file")' <<<"$json" >"/dev/null"; then
+		cover_pdf_file="$(jq --raw-output '.pdf.cover_pdf_file // ""' <<<"$json")"
+	fi
+	if jq --exit-status '.pdf | has("partials_pdf_directory")' <<<"$json" >"/dev/null"; then
+		partials_pdf_directory="$(jq --raw-output '.pdf.partials_pdf_directory // ""' <<<"$json")"
+	fi
+	if jq --exit-status '.pdf | has("icc_profile")' <<<"$json" >"/dev/null"; then
+		icc_profile="$(jq --raw-output '.pdf.icc_profile // ""' <<<"$json")"
+		icc_profile="$LIBRARY_EX10DEAD_BOOK_PATH/$icc_profile"
+	fi
+	if jq --exit-status '.pdf | has("srgb_profile")' <<<"$json" >"/dev/null"; then
+		srgb_profile="$(jq --raw-output '.pdf.srgb_profile // ""' <<<"$json")"
+	fi
+	if jq --exit-status '.pdf | has("expected_bleed_in_mm")' <<<"$json" >"/dev/null"; then
+		expected_bleed_in_mm="$(jq --raw-output '.pdf.expected_bleed_in_mm' <<<"$json")"
+	fi
+	if jq --exit-status '.pdf | has("page_width_mm")' <<<"$json" >"/dev/null"; then
+		page_width_mm="$(jq --raw-output '.pdf.page_width_mm' <<<"$json")"
+	fi
+	if jq --exit-status '.pdf | has("page_height_mm")' <<<"$json" >"/dev/null"; then
+		page_height_mm="$(jq --raw-output '.pdf.page_height_mm' <<<"$json")"
+	fi
+	if jq --exit-status '.pdf | has("tolerance_pt")' <<<"$json" >"/dev/null"; then
+		tolerance_pt="$(jq --raw-output '.pdf.tolerance_pt' <<<"$json")"
+	fi
+	if jq --exit-status '.pdf | has("debug_skip_alpha_channels_check")' <<<"$json" >"/dev/null"; then
+		debug_skip_alpha_channels_check="$(jq --raw-output '.pdf.debug_skip_alpha_channels_check' <<<"$json")"
+	fi
+	if jq --exit-status '.pdf | has("target_print_width_mm")' <<<"$json" >"/dev/null"; then
+		target_print_width_mm="$(jq --raw-output '.pdf.target_print_width_mm' <<<"$json")"
+	fi
+	if jq --exit-status '.pdf | has("target_print_dpi")' <<<"$json" >"/dev/null"; then
+		target_print_dpi="$(jq --raw-output '.pdf.target_print_dpi' <<<"$json")"
+	fi
+
+	return 0
+}
+

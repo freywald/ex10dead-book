@@ -1,0 +1,36 @@
+# Library defaults.
+#
+# Indentation should be tabs. Booleans are bare true/false.
+
+captions:
+    default_output_image_size_in_pixels_x: 9921	# DIN A4 at 1200 dpi, printable as A0 at 300 dpi
+    default_output_image_size_in_pixels_y: 14032
+    line_scale_factor: 1.0
+    font_size_caption_height_ratio_scale_factor: 1.3751
+    font_size_caption_height_ratio_scale_factor_fine: 1.5
+    engine_use_pando: true
+    automatically_wrap_long_lines: true
+    default_variants: [100, 75, 60, 55, 50, 45, 40, 35, 30, 25, 20, 15, 10, 5]
+    default_font_size: 112
+    gallery_template: "Build/gallery-templates/Gallery-Reference-Document.odt"
+    captioned_images_directory: "Build/captioned-images"
+    link_base_directory: "Build/Im Dokument verlinkte Bilder"
+    text_font_full_file_path: "assets/fonts/SIL Open Font License 1.1/OpenSans-Regular-from-devuvan.ttf"
+    bibliography_name: "captioned-images"
+    bibliography_sources_path: "Bibliographies/captioned-images/"
+
+pdf:
+    metadata_file: "configuration/pdf-metadata.json"
+    temporary_directory: "Build/tmp/"
+    cover_pdf_file: "2. Entwurf/Umschlag/Umschlag.pdf"
+    partials_pdf_directory: "Build/final-pdf-parts/"
+    icc_profile: "assets/color-profiles/ISOcoated_v2_300_eci.icc"
+    srgb_profile: "/usr/share/color/icc/colord/sRGB.icc"
+    expected_bleed_in_mm: 3
+    page_width_mm: 210		# DIN A4
+    page_height_mm: 297		# DIN A4
+    tolerance_pt: 1.0
+    debug_skip_alpha_channels_check: true
+    target_print_width_mm: 841	# A0
+    target_print_dpi: 300
+

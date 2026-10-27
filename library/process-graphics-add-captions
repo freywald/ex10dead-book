@@ -1,0 +1,769 @@
+#!/bin/bash
+
+source -- "./$LIBRARY_EX10DEAD_BOOK_PATH/library/utilities/utilities" || exit 1
+
+# configuration start
+
+# A4 paper size as exactly 210 mm × 297 mm, which are whole integer values with no fractional part (i.e., 0 decimal places).The inch equivalents are not part of the ISO standard but are derived from the exact conversion factor of 1 inch = 25.4 mm. This yields approximately 8.27 inches × 11.69 inches when rounded to two decimal places.
+# The ideal, unrounded dimensions of A4 paper, based on the ISO 216 mathematical definition (aspect ratio of 1:√2 and derived from an A0 area of exactly 1 m² without rounding to integers), are as follows:
+# These values are computed using the formulas for the A series: shorter side = 1000 × 2^{-9/4} mm, longer side = 1000 × 2^{-7/4} mm (or equivalent in meters scaled by 1000). The standard A4 size rounds these to the nearest integer millimeters: 210 mm × 297 mm (approximately 8.27 inches × 11.69 inches).
+# din_a4_ideal_x="210.2241038134286357577813690583037237600085655892" # in mm
+# din_a4_ideal_y="297.30177875068026667937499264011897882324302311595" # in mm
+
+# configuration end
+
+function local_exit_failsafe() { __exit_failsafe; exit 1; }
+
+build_for_language=""
+
+# script task start
+
+extract_local_paths_from_bibliography() {
+	__info "Reading input. Generating tree…"
+	generate_tree "-1" false false ""
+	__info "Generating tree… done."
+	verify_tree
+
+	declare -g -a captioned_ids=()
+	declare -g -a captioned_titles=()
+	declare -g -a captioned_local_paths=()
+	declare -g -a captioned_variants=()
+
+	local key
+	for key in "${tree_order[@]}"; do
+		local type
+		type="$(resolved_type "$key")" || type=""
+		local data_kind="${type#*:}"
+		type="${type%%:*}"
+		[[ "$type" != "captioned-image" ]] && continue
+
+		local id
+		id="$(get_metadata "_id" "$key")"
+		[[ -z "$id" || "$id" == *"※"* ]] && continue
+
+		[[ -n "$select_id" && "$id" != "$select_id" ]] && continue
+
+		local title
+		title="$(get_metadata "title_$build_for_language" "$key")" || title=""
+		if [[ -z "$title" ]]; then
+			title="$(get_metadata "title" "$key")" || title=""
+		fi
+
+		local variants
+		variants="$(get_metadata "variants" "$key")" || variants=""
+		[[ -z "$variants" ]] && variants="$default_variants"
+
+		local -a local_paths=()
+		mapfile -t local_paths < <(get_values "$key" "local_path" true)
+		if (( ${#local_paths[@]} == 0 )); then
+			local fallback
+			fallback="$(get_metadata "_" "$key")" || fallback=""
+			[[ -n "$fallback" ]] && local_paths=("$fallback")
+		fi
+
+		local local_path="${local_paths[0]-}"
+		if [[ -z "$local_path" || ! -f "$local_path" ]]; then
+			__warn "Captioned-image %s has no usable local_path (%s)" "$id" "$local_path"
+			continue
+		fi
+
+		if (( ${#local_paths[@]} > 1 )); then
+			local extra
+			for extra in "${local_paths[@]:1}"; do
+				if [[ ! -f "$extra" ]]; then
+					__warn "Captioned-image %s has additional local_path that does not exist (%s)" "$id" "$extra"
+				fi
+			done
+		fi
+
+		captioned_ids+=("$id")
+		captioned_titles+=("$title")
+		captioned_local_paths+=("$local_path")
+		captioned_variants+=("$variants")
+	done
+
+	__info "Found %s captioned-images with local_path" "${#captioned_local_paths[@]}"
+}
+
+generate_captioned_image() {
+	local id="$1"
+	local title="$2"
+	local input_full_file_path="$3"
+	local variants="${4:-"$default_variants"}"
+
+	local link_index
+	link_index="$(printf "%05d" "$id")"
+
+	local image_file_name
+	image_file_name="$(basename -- "$input_full_file_path")"
+	local image_file_name_without_extension="${image_file_name%"."*}"
+
+	gallery_xml=""
+	gallery_image_number=0
+
+	local caption_text="$title"
+	caption_text="$(__trim_whitespaces "$caption_text")"
+	caption_text="${caption_text//$'\n'/"#"}"
+	caption_text="${caption_text//"\n"/"#"}"
+
+	if ! $automatically_wrap_long_lines; then
+		caption_text="${caption_text//", "/"#"}"
+		caption_text="${caption_text//","/"#"}"
+	fi
+
+	local tmp
+	tmp="${caption_text//"#"}"
+
+	local processed_caption_text
+	processed_caption_text="$caption_text"
+	if [[ -n "$caption_text" ]]; then
+		caption_text="Bild $id: $caption_text"
+	else
+		caption_text="Bild $id"
+	fi
+
+	local output_directory="$captioned_images_directory/$id"
+	output_directory="$(__normalize_path_slashes "$output_directory")"
+
+	mkdir --parents -- "$output_directory/configuration/"
+
+	# remove unused variants from previous runs
+	declare -A used_variants=()
+	local variant
+	for variant in $variants; do
+		used_variants["$variant"]=1
+	done
+
+	for variant in {1..99}; do
+		if [[ -z "${used_variants["$variant"]-}" ]]; then
+			local stale="$output_directory/$image_file_name_without_extension.captioned.$variant.png"
+			if [[ -f "$stale" ]]; then
+				__info "removing unused caption variant %s" "$stale"
+				rm -- "$stale"
+			fi
+
+			local link_file="$link_base_directory/L$link_index.captioned.$variant"
+			if [[ -f "$link_file" && -L "$link_file" ]]; then
+				__info "removing unused caption variant link file %s" "$link_file"
+				rm -- "$link_file"
+			fi
+		fi
+	done
+
+	local cache_is_invalid=false
+	local cache_file="$output_directory/configuration/cache"
+	if [[ -f "$output_directory/configuration/invalid" ]]; then
+		__info "cache for graphics #%s is invalid, recreating captions." "$id"
+		echo "INVALID" >> "$output_directory/configuration/cache"
+		touch -- "$output_directory/configuration/invalid"
+		cache_is_invalid=true
+	fi
+
+	if [[ -f "$output_directory/configuration/last_modified_at" ]]; then
+		local status=0
+		local file_modified_time
+		file_modified_time="$(stat --format "%Y" -- "$input_full_file_path")" || status="$(abort_on_interrupt "$?")"
+		if (( status != 0 )); then
+			return "$status"
+		fi
+
+		local cached_last_modified_at
+		cached_last_modified_at="$(cat -- "$output_directory/configuration/last_modified_at")"
+
+		if [[ "$file_modified_time" != "$cached_last_modified_at" ]]; then
+			__info "graphics #%s has been modified, invalidating caches." "$id"
+			cache_is_invalid=true
+			echo "INVALID" >> "$output_directory/configuration/cache"
+			touch -- "$output_directory/configuration/invalid"
+		fi
+	else
+		cache_is_invalid=true
+		echo "INVALID" >> "$output_directory/configuration/cache"
+		touch -- "$output_directory/configuration/invalid"
+	fi
+
+	if ! $cache_is_invalid; then
+		for variant in $variants; do
+			local check_path
+			if (( variant == 100 )); then
+				check_path="$output_directory/$image_file_name_without_extension.captioned.png"
+			else
+				check_path="$output_directory/$image_file_name_without_extension.captioned.$variant.png"
+			fi
+
+			if [[ -f "$check_path" ]]; then
+				local status=0
+				magick identify -regard-warnings "$check_path" >"/dev/null" || status="$(abort_on_interrupt "$?")"
+				if (( status != 0 )); then
+					cache_is_invalid=true
+					__warn "Warning: image %s is invalid!" "$check_path"
+					__info "Cache for graphics #%s is invalid, recreating captions." "$id"
+					echo "INVALID" >> "$output_directory/configuration/cache"
+					touch -- "$output_directory/configuration/invalid"
+					break
+				fi
+			else
+				cache_is_invalid=true
+				__info "Cache for graphics #%s is invalid, recreating captions." "$id"
+				echo "INVALID" >> "$output_directory/configuration/cache"
+				touch -- "$output_directory/configuration/invalid"
+				break
+			fi
+		done
+	fi
+
+	skip_generation=false
+
+	__verbose "Item base path: %s" "$output_directory/$image_file_name_without_extension"
+
+	if ! $force_regeneration; then
+		caption_text="Bild $id${processed_caption_text//"#"/$'\n'}"
+		if ! $cache_is_invalid && [[ -f "$cache_file" ]]; then
+			cached_caption_text="$(cat -- "$cache_file")"
+
+			local cache_value="${caption_text}|${variants}|${default_font_size}|${default_output_image_size_in_pixels_x}|${default_output_image_size_in_pixels_y}|${line_scale_factor}|${font_size_caption_height_ratio_scale_factor}|${font_size_caption_height_ratio_scale_factor_fine}|${engine_use_pando}|${automatically_wrap_long_lines}"
+
+			if [[ "$cached_caption_text" == "$cache_value" ]]; then
+				__verbose "Notice: caption for graphics %s did not change, skipping generation" "$id"
+				__debug "caption for graphics #%s unchanged, skipping generation" "$id"
+				skip_generation=true
+			fi
+		fi
+	else
+		__verbose "Enforcing regeneration of configurated variants"
+	fi
+
+	! $skip_generation && touch -- "$output_directory/configuration/invalid"
+
+	local link_file
+	link_file="$link_base_directory/L$link_index"
+
+	local relative_path
+	relative_path="${input_full_file_path#"$__script_path"}"
+	relative_path="$(__normalize_path_slashes "$relative_path")"
+	__verbose "linking %s->%s" "$relative_path" "$link_file"
+
+	local traversal
+	traversal="$(__to_path_traversal "$link_file")"
+	local status=0
+	(cd "$(dirname -- "$link_file")" && __replace_symlink --force --symbolic -- "$traversal/$relative_path" "$(basename -- "$link_file")") || status="$(abort_on_interrupt "$?")"
+	if (( status != 0 )); then
+		__error "Cannot link %s->%s!" "$relative_path" "$link_file"
+		return "$status"
+	fi
+
+	status=0
+	local wh
+	wh="$(magick identify -format "%w %h" "$input_full_file_path")" || status="$(abort_on_interrupt "$?")"
+	if (( status != 0 )); then
+		__error "Error on reading image %s" "$input_full_file_path"
+		return "$status"
+	fi
+
+	local image_width image_height
+	read -r image_width image_height <<< "$wh"
+
+	local base_resized_width
+	if (( image_height > default_output_image_size_in_pixels_y )); then
+		base_resized_width="$(bc <<< "scale=0; $image_width * $default_output_image_size_in_pixels_y / $image_height")"
+	else
+		base_resized_width="$image_width"
+	fi
+
+	local ppi=""
+
+	for variant in $variants; do
+
+		if $__interrupted; then
+			__interrupted=false
+			__info "CTRL+C received, exiting."
+			return 1
+		fi
+
+		if [[ ! "$variant" =~ ^[0-9]+$ ]]; then
+			__warn "captioned-image %s has non-numeric variant %s, skipping" "$id" "$variant"
+			continue
+		fi
+
+		if [[ -n "$caption_text" ]]; then
+			if ! $automatically_wrap_long_lines && (( variant < 10 )); then
+				caption_text="Bild $id\n${processed_caption_text//"#"/$'\n'}"
+			else
+				caption_text="Bild $id: ${processed_caption_text//"#"/$'\n'}"
+			fi
+		else
+			caption_text="Bild $id"
+		fi
+
+		local output_full_file_path
+		if (( variant == 100 )); then
+			output_full_file_path="$output_directory/$image_file_name_without_extension.captioned.png"
+		else
+			output_full_file_path="$output_directory/$image_file_name_without_extension.captioned.$variant.png"
+		fi
+
+		if ! $skip_generation; then
+			__info "Writing captioned image variant %s to path: %s" "$variant" "$output_full_file_path"
+
+			local variant_width
+			variant_width="$(bc <<< "scale=0; $base_resized_width * $variant / 100")"
+
+			local output_image_size1="x${default_output_image_size_in_pixels_y}>"
+			local output_image_size2="%[fx: (%[w] * 0.01 * $variant) ]x,${default_output_image_size_in_pixels_y}>"
+
+			local compression
+			if $quick_compression; then
+				# with -define png:compression-level=0 file size becomes too big to make it practical
+				compression="-define png:compression-level=1 -define png:compression-filter=0 -define png:color-type=2"
+			else
+				compression="-define png:compression-level=9 -define png:compression-filter=5 -define png:compression-strategy=1"
+			fi
+
+			# pixel font size scaled so the physical size matches across images
+			local font_size
+			font_size="$(bc <<< "scale=0; $default_font_size * $base_resized_width / $default_output_image_size_in_pixels_x")"
+			(( font_size < 4 )) && font_size=4
+
+			local pango_font_size
+			pango_font_size="$(bc <<< "scale=0; $font_size * 1.91 / ($inch_in_mm / 10)")"
+			(( pango_font_size < 4 )) && pango_font_size="4"
+
+			[[ -f "$output_full_file_path" ]] && mv -- "$output_full_file_path" "${output_full_file_path}_backup"
+
+			if $engine_use_pando; then
+				caption_text="${caption_text//"&"/"&amp;"}"
+				local html_text
+				html_text="<span variant=\"small-caps\" background=\"white\" background_alpha=\"100%\" insert_hyphens=\"true\""
+				if ! $automatically_wrap_long_lines; then
+					html_text+=" wrap=\"none\""
+				fi
+				html_text="$html_text font_size=\"${pango_font_size}pt\""
+				caption_text="$html_text>$caption_text</span>"
+
+				status=0
+				$__debug && set -x
+				magick -units "PixelsPerInch" "$input_full_file_path" $compression -profile "$srgb_profile" -alpha "off" -resize "$output_image_size1" -resize "$output_image_size2" "$output_full_file_path" || status="$(abort_on_interrupt "$?")"
+				$__debug && set +x
+				if (( status != 0 )); then
+					[[ -f "${output_full_file_path}_backup" ]] && mv -- "${output_full_file_path}_backup" "$output_full_file_path"
+					__warn "magick resize failed for %s variant %s" "$input_full_file_path" "$variant"
+					return "$status"
+				fi
+
+				if $__interrupted; then
+					__interrupted=false
+					__info "CTRL+C received, exiting."
+					return 1
+				fi
+
+				if (( variant == 100 )); then
+					status=0
+					local measured_width
+					measured_width="$(magick identify -format '%w' "$output_full_file_path")" || status="$(abort_on_interrupt "$?")"
+					if (( status != 0 )); then
+						return "$status"
+					fi
+					ppi="$(bc <<< "scale=33; $measured_width / $din_a4_ideal_x * $inch_in_mm")"
+					ppi="$(printf '%.0f' "$ppi")"
+				fi
+
+				local caption_tmp
+				caption_tmp="$(__create_temporary_file)"
+
+				status=0
+				$__debug && set -x
+				magick -background "white" -fill "black" -size "${variant_width}x" -gravity "center" -define "pango:align=center" -pointsize "$pango_font_size" -font "OpenSans Regular" pango:"$caption_text" "png:$caption_tmp" || status="$(abort_on_interrupt "$?")"
+				$__debug && set +x
+				if (( status != 0 )); then
+					[[ -f "${output_full_file_path}_backup" ]] && mv -- "${output_full_file_path}_backup" "$output_full_file_path"
+					__warn "magick caption render failed for %s variant %s" "$input_full_file_path" "$variant"
+					return "$status"
+				fi
+
+				status=0
+				local rendered_height
+				rendered_height="$(magick identify -format '%h' "png:$caption_tmp")" || status="$(abort_on_interrupt "$?")"
+				if (( status != 0 )); then
+					[[ -f "$caption_tmp" ]] && rm -- "$caption_tmp"
+					return "$status"
+				fi
+				caption_height="$((rendered_height + 8))"
+
+				status=0
+				$__debug && set -x
+				magick -units "PixelsPerInch" "$output_full_file_path" $compression -profile "$srgb_profile" -gravity "south" -background "white" -splice "0x${caption_height}" "png:$caption_tmp" -gravity "south" -geometry "+0+4" -composite -density "$ppi" -units "PixelsPerInch" "$output_full_file_path" || status="$(abort_on_interrupt "$?")"
+				$__debug && set +x
+				[[ -f "$caption_tmp" ]] && rm -- "$caption_tmp"
+				if (( status != 0 )); then
+					[[ -f "${output_full_file_path}_backup" ]] && mv -- "${output_full_file_path}_backup" "$output_full_file_path"
+					__warn "magick caption composite failed for %s variant %s" "$input_full_file_path" "$variant"
+					return "$status"
+				fi
+			else
+				# source: "/usr/share/fonts/truetype/open-sans/OpenSans-Regular.ttf"
+				local text_font_for_caption="$LIBRARY_EX10DEAD_BOOK_PATH/$text_font_full_file_path"
+
+				status=0
+				$__debug && set -x
+				magick -units "PixelsPerInch" "$input_full_file_path" $compression -resize "$output_image_size1" -resize "$output_image_size2" "$output_full_file_path" || status="$(abort_on_interrupt "$?")"
+				$__debug && set +x
+				if (( status != 0 )); then
+					[[ -f "${output_full_file_path}_backup" ]] && mv -- "${output_full_file_path}_backup" "$output_full_file_path"
+					__warn "magick resize failed for %s variant %s" "$input_full_file_path" "$variant"
+					return "$status"
+				fi
+
+				if (( variant == 100 )); then
+					status=0
+					local measured_width
+					measured_width="$(magick identify -format '%w' "$output_full_file_path")" || status="$(abort_on_interrupt "$?")"
+					if (( status != 0 )); then
+						return "$status"
+					fi
+					ppi="$(bc <<< "scale=33; $measured_width / $din_a4_ideal_x * $inch_in_mm")"
+					ppi="$(printf '%.0f' "$ppi")"
+				fi
+
+				local text_format
+				if $automatically_wrap_long_lines; then
+					text_format="caption"
+				else
+					text_format="label"
+				fi
+
+				local caption_tmp
+				caption_tmp="$(__create_temporary_file)"
+
+				status=0
+				$__debug && set -x
+				magick -background "white" -fill "black" -size "${variant_width}x" -font "$text_font_for_caption" -pointsize "$font_size" -gravity "center" "${text_format}:$caption_text" "png:$caption_tmp" || status="$(abort_on_interrupt "$?")"
+				$__debug && set +x
+				if (( status != 0 )); then
+					[[ -f "${output_full_file_path}_backup" ]] && mv -- "${output_full_file_path}_backup" "$output_full_file_path"
+					__warn "magick caption render failed for %s variant %s" "$input_full_file_path" "$variant"
+					return "$status"
+				fi
+
+				status=0
+				local rendered_height
+				rendered_height="$(magick identify -format '%h' "png:$caption_tmp")" || status="$(abort_on_interrupt "$?")"
+				if (( status != 0 )); then
+					[[ -f "$caption_tmp" ]] && rm -- "$caption_tmp"
+					return "$status"
+				fi
+				caption_height="$((rendered_height + 8))"
+
+				status=0
+				$__debug && set -x
+				magick -units "PixelsPerInch" "$output_full_file_path" $compression -gravity "south" -background "white" -splice "0x${caption_height}" "png:$caption_tmp" -gravity "south" -geometry "+0+4" -composite -density "$ppi" -units "PixelsPerInch" "$output_full_file_path" || status="$(abort_on_interrupt "$?")"
+				$__debug && set +x
+				[[ -f "$caption_tmp" ]] && rm -- "$caption_tmp"
+				if (( status != 0 )); then
+					[[ -f "${output_full_file_path}_backup" ]] && mv -- "${output_full_file_path}_backup" "$output_full_file_path"
+					__warn "magick caption composite failed for %s variant %s" "$input_full_file_path" "$variant"
+					return "$status"
+				fi
+			fi
+
+			[[ -f "${output_full_file_path}_backup" ]] && rm -- "${output_full_file_path}_backup"
+		fi
+
+		if $__interrupted; then
+			__interrupted=false
+			__info "CTRL+C received, exiting."
+			return 1
+		fi
+
+		relative_path="${output_full_file_path#"$__script_path"}"
+		relative_path="$(__normalize_path_slashes "$relative_path")"
+		__verbose "Linking %s->%s" "$relative_path" "$link_file.captioned.$variant"
+
+		traversal="$(__to_path_traversal "$link_file.captioned.$variant")"
+		status=0
+		(cd "$(dirname -- "$link_file.captioned.$variant")" && __replace_symlink --force --symbolic -- "$traversal/$relative_path" "$(basename -- "$link_file.captioned.$variant")") || status="$(abort_on_interrupt "$?")"
+		if (( status != 0 )); then
+			__error "Cannot link %s->%s!" "$relative_path" "$link_file.captioned.$variant"
+			return "$status"
+		fi
+
+		if [[ -f "$output_full_file_path" ]]; then
+			status=0
+			local g_width g_height
+			read -r g_width g_height <<< "$(magick identify -format '%w %h' "$output_full_file_path")" || status="$(abort_on_interrupt "$?")"
+			if (( status != 0 )); then
+				return "$status"
+			fi
+
+			local g_width_mm g_height_mm
+			g_width_mm="$(bc <<< "scale=2; $g_width / $ppi * $inch_in_mm")"
+			g_height_mm="$(bc <<< "scale=2; $g_height / $ppi * $inch_in_mm")"
+
+			local multiplicities
+			multiplicities="$(bc <<< "scale=0; 100 / $variant")"
+			(( multiplicities < 1 )) && multiplicities=1
+			local x="-16.51"
+			local y="10.00"
+
+			gallery_xml+="<text:h text:style-name=\"Heading_20_3\" text:outline-level=\"5\">"
+
+			local i
+			local frame_base="image_$((gallery_image_number + 1))"
+			for (( i = 0; i < multiplicities; i++ )); do
+				local z_index="$gallery_image_number"
+				((gallery_image_number++)) ||__expression_may_fail
+
+				local frame_name="$frame_base"
+				(( i > 0 )) && frame_name="$frame_name n_$i"
+
+				gallery_xml+="<draw:frame draw:style-name=\"fr1\" draw:name=\"$frame_name\" text:anchor-type=\"paragraph\" svg:x=\"${x}mm\" svg:y=\"${y}mm\" svg:width=\"${g_width_mm}mm\" svg:height=\"${g_height_mm}mm\" draw:z-index=\"$z_index\">"
+				gallery_xml+="<draw:image xlink:href=\"$__script_path/$relative_path\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\" draw:mime-type=\"image/png\"/>"
+				gallery_xml+="</draw:frame>"
+
+				x="$(bc <<< "scale=2; $x + $g_width_mm")"
+			done
+
+			gallery_xml+="$variant (${multiplicities}x)"
+			gallery_xml+="</text:h>"
+			gallery_xml+="<text:p text:style-name=\"Standard\"><text:s/></text:p>"
+		fi
+	done
+
+	if ! $skip_generation; then
+		caption_text="Bild $id${processed_caption_text//"#"/$'\n'}"
+		local cache_value="${caption_text}|${variants}|${default_font_size}|${default_output_image_size_in_pixels_x}|${default_output_image_size_in_pixels_y}|${line_scale_factor}|${font_size_caption_height_ratio_scale_factor}|${font_size_caption_height_ratio_scale_factor_fine}|${engine_use_pando}|${automatically_wrap_long_lines}"
+
+		echo "$cache_value" >| "$cache_file"
+		status=0
+		stat --format "%Y" -- "$input_full_file_path" >| "$output_directory/configuration/last_modified_at" || status="$(abort_on_interrupt "$?")"
+		if (( status != 0 )); then
+			return "$status"
+		fi
+		rm -- "$output_directory/configuration/invalid"
+
+		generate_gallery_overview "$captioned_images_directory/$id.odt"
+	fi
+}
+
+generate_gallery_overview() {
+	local gallery_file="$1"
+
+	if [[ -z "$gallery_xml" ]]; then
+		__info "No gallery entries, skipped to write gallery file: %s" "$gallery_file"
+		return 0
+	fi
+
+	if [[ ! -f "$gallery_template" ]]; then
+		__warn "Gallery template not found at %s, skipping %s" "$gallery_template" "$gallery_file"
+		return 1
+	fi
+
+	local gallery_directory
+	gallery_directory="$(dirname -- "$gallery_file")"
+	mkdir --parents -- "$gallery_directory" || return 1
+
+	local old_working_directory="$PWD"
+	cd -- "$gallery_directory" || return 1
+
+	local status=0
+	cp -- "$__script_path/$gallery_template" "$(basename -- "$gallery_file")" || status="$(abort_on_interrupt "$?")"
+	if (( status != 0 )); then
+		cd -- "$old_working_directory" || return 1
+		return "$status"
+	fi
+
+	status=0
+	unzip -oqq -- "$(basename -- "$gallery_file")" "content.xml" || status="$(abort_on_interrupt "$?")"
+	if (( status != 0 )); then
+		cd -- "$old_working_directory" || return 1
+		return "$status"
+	fi
+
+	local content
+	content='<office:forms form:automatic-focus=\"false\" form:apply-design-mode=\"false\"/>\n<text:sequence-decls>\n<text:sequence-decl text:display-outline-level=\"0\" text:name=\"Illustration\"/>\n<text:sequence-decl text:display-outline-level=\"0\" text:name=\"Table\"/>\n<text:sequence-decl text:display-outline-level=\"0\" text:name=\"Text\"/>\n<text:sequence-decl text:display-outline-level=\"0\" text:name=\"Drawing\"/>\n<text:sequence-decl text:display-outline-level=\"0\" text:name=\"Figure\"/>\n</text:sequence-decls>'"$gallery_xml"
+	# escape for sed replacement; use | as delimiter so / in ../ is literal
+	content="$(sed 's/[&|]/\\&/g' <<< "$content")"
+	sed -i -- 's|office:text\(.*\)office:text|office:text>'"$content"'</office:text|g' "content.xml"
+
+	local styles
+	styles='<style:style style:name=\"fr1\" style:family=\"graphic\" style:parent-style-name=\"Graphics\">\n<style:graphic-properties style:run-through=\"foreground\" style:wrap=\"none\" style:vertical-pos=\"from-top\" style:vertical-rel=\"paragraph\" style:horizontal-pos=\"from-left\" style:horizontal-rel=\"paragraph\" style:mirror=\"none\" fo:clip=\"rect(0mm, 0mm, 0mm, 0mm)\" draw:luminance=\"0%\" draw:contrast=\"0%\" draw:red=\"0%\" draw:green=\"0%\" draw:blue=\"0%\" draw:gamma=\"100%\" draw:color-inversion=\"false\" draw:image-opacity=\"100%\" draw:color-mode=\"standard\"/>\n</style:style>'
+	styles="$(sed 's/[&|]/\\&/g' <<< "$styles")"
+	sed -i -- 's|office:automatic-styles\(.*\)office:automatic-styles|office:automatic-styles>'"$styles"'</office:automatic-styles|g' "content.xml"
+
+	status=0
+	zip --quiet --freshen "$(basename -- "$gallery_file")" -- "content.xml" || status="$(abort_on_interrupt "$?")"
+	if $__debug; then
+		mv -- "content.xml" "$id.xml"
+	else
+		rm -- "content.xml"
+		[[ -f "$id.xml" ]] && rm -- "$id.xml"
+	fi
+
+	cd -- "$old_working_directory" || return 1
+	if (( status != 0 )); then
+		return "$status"
+	fi
+
+	__info "Gallery written to %s" "$gallery_file"
+}
+
+function generate_captioned_images() {
+	din_a4_ideal_x="$(bc -l <<< "1000 * e((-9/4) * l(2))")"
+	din_a4_ideal_y="$(bc -l <<< "1000 * e((-7/4) * l(2))")"
+
+	inch_in_mm="25.4"
+
+	__on_sigint_set_interrupted_flag
+
+	skip_generation=false
+	gallery_xml=""
+	gallery_image_number=0
+	force_regeneration=false
+	automatically_wrap_long_lines=false
+	engine_use_pando=false
+	select_id=""
+	build_for_language=""
+	configuration_files=()
+
+	local print_sources
+	print_sources=false
+
+	local -a arguments=()
+	while (($# > 0 )); do
+		if [[ "$1" == "--print" || "$1" == "--print-sources" ]]; then
+			print_sources=true
+			shift ||__expression_may_fail
+		elif [[ "$1" == "--finalize" ]]; then
+			quick_compression=false
+			shift ||__expression_may_fail
+		elif [[ "$1" == "--configuration-file" ]]; then
+			if [[ -z "${2-}" ]]; then
+				__error "--configuration-file requires a path"
+				local_exit_failsafe
+			fi
+			configuration_files+=("$2")
+			shift 2 ||__expression_may_fail
+		elif [[ "$1" == "--configuration-file="* ]]; then
+			if [[ -z "${1#--configuration-file=}" ]]; then
+				__error "--configuration-file requires a path"
+				local_exit_failsafe
+			fi
+			configuration_files+=("${1#--configuration-file=}")
+			shift ||__expression_may_fail
+		elif [[ "$1" == "--build-for-language" ]]; then
+			if [[ -z "${2-}" ]]; then
+				__error "--build-for-language requires a language"
+				local_exit_failsafe
+			fi
+			build_for_language="$2"
+			shift 2 ||__expression_may_fail
+		elif [[ "$1" == "--build-for-language="* ]]; then
+			if [[ -z "${1#--build-for-language=}" ]]; then
+				__error "--build-for-language requires a language"
+				local_exit_failsafe
+			fi
+			build_for_language="${1#--build-for-language=}"
+			shift ||__expression_may_fail
+		elif [[ "$1" == "--engine-use-pango" ]]; then
+			engine_use_pando=true
+			shift ||__expression_may_fail
+		elif [[ "$1" == "--engine-use-image-magick" ]]; then
+			engine_use_pando=false
+			shift ||__expression_may_fail
+		elif [[ "$1" == "--automatically-wrap-long-lines" ]]; then
+			automatically_wrap_long_lines=true
+			shift ||__expression_may_fail
+		elif [[ "$1" == "--force" || "$1" == "--force-overwrite" || "$1" == "--force-regeneration" ]]; then
+			force_regeneration=true
+			shift ||__expression_may_fail
+		elif [[ "$1" == "--select-id" ]]; then
+			if [[ -z "${2-}" || "$2" == --* ]]; then
+				__error "%s requires an id" "$1"
+				local_exit_failsafe
+			fi
+			select_id="$2"
+			shift 2 ||__expression_may_fail
+		elif [[ "$1" == "--select-id="* ]]; then
+			select_id="${1#"--select-id="}"
+			if [[ -z "$select_id" ]]; then
+				__error "--select-id requires an id"
+				local_exit_failsafe
+			fi
+			shift ||__expression_may_fail
+		else
+			arguments+=("$1")
+			shift ||__expression_may_fail
+		fi
+	done
+
+	set -- "${arguments[@]}"
+
+	if (($# > 0)); then
+		__error "unknown program arguments: %s" "$@"
+		local_exit_failsafe
+	fi
+
+	if [[ -z "$build_for_language" ]]; then
+		__error "argument --build-for-language= is missing"
+		local_exit_failsafe
+	fi
+
+	local default_configuration_file
+	default_configuration_file="$LIBRARY_EX10DEAD_BOOK_PATH/configuration/defaults.yaml"
+	if [[ ! -f "$default_configuration_file" ]]; then
+		__error "default configuration file not found: %s" "$default_configuration_file"
+		local_exit_failsafe
+	fi
+
+	__verbose "loading configuration file %s" "$default_configuration_file"
+	load_configuration_file "$default_configuration_file"
+
+	local configuration_file
+	for configuration_file in "${configuration_files[@]}"; do
+		__verbose "loading configuration file %s" "$configuration_file"
+		if [[ ! -f "$configuration_file" ]]; then
+			__error "configuration file %s does not exist" "$configuration_file"
+			local_exit_failsafe
+		fi
+
+		load_configuration_file "$configuration_file"
+	done
+
+	__heading "Parsing sources"
+	__info "Parsing path %s…" "$bibliography_sources_path"
+	parse_sources_path "$bibliography_sources_path" -1 --new-line-format || __failure "Parsing failed!"
+	if ! validate_tree; then
+		__failure "Validating sources failed!"
+		__error "Tree validation failed!"
+		local_exit_failsafe
+	fi
+	__success "Parsing completed."
+
+	if $print_sources; then
+		print_tree true true
+		__info "[%s] done." "__$__current_script_name"
+		exit 0
+	fi
+
+	$__debug && print_tree true true
+
+	if [[ -n "$select_id" ]]; then
+		__verbose "Selecting id %s" "$select_id"
+	fi
+
+	extract_local_paths_from_bibliography
+
+	mkdir --parents -- "$captioned_images_directory/"
+
+	local i
+	for i in "${!captioned_local_paths[@]}"; do
+		if $__interrupted; then
+			__interrupted=false
+			__info "CTRL+C received, exiting."
+			return 1
+		fi
+
+		if ! generate_captioned_image "${captioned_ids["$i"]}" "${captioned_titles["$i"]}" "${captioned_local_paths["$i"]}" "${captioned_variants["$i"]}"; then
+			return 1
+		fi
+	done
+}

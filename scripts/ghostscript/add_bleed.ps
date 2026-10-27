@@ -1,0 +1,9 @@
+%!PS-Adobe-3.0
+%%Title: Add 3 mm bleed shift + uniform production boxes for ALL pages
+
+% Shift origin for bleed on every page
+<<
+  /BeginPage {
+    3 72 mul 25.4 div dup translate   % ≈8.503937 pt right & up
+  } bind
+>> setpagedevice

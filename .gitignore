@@ -1,0 +1,7 @@
+venv/*
+.venv/*
+__pycache__/
+archive/
+archive2/
+.idea/
+assets/fonts/non-free/

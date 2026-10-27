@@ -1,0 +1,81 @@
+%!
+% Corrected PDF/X prefix for Ghostscript pdfwrite.
+% Supports PDF/X-1a (-dPDFX=1), PDF/X-3 (-dPDFX=3), PDF/X-4 (-dPDFX=4).
+%
+% Place the ICC profile at the path defined below, or edit the path.
+% Under -dSAFER you must also pass:
+%   --permit-file-read=Build/assets/color-profiles/ISOcoated_v2_300_eci.icc
+% (or whatever absolute/relative path you use).
+
+% ---------------------------------------------------------------------------
+% Require a valid ColorConversionStrategy (Gray or CMYK).
+% PDF/X-1a and PDF/X-3 Device output only allow Gray/CMYK.
+% ---------------------------------------------------------------------------
+systemdict /ColorConversionStrategy known {
+  systemdict /ColorConversionStrategy get cvn dup /Gray ne exch /CMYK ne and
+} {
+  (\nERROR: ColorConversionStrategy not set.)=
+  true
+} ifelse
+{ (ERROR: ColorConversionStrategy must be /DeviceGray or /DeviceCMYK.)=
+  /ColorConversionStrategy cvx /rangecheck signalerror
+} if
+
+% ---------------------------------------------------------------------------
+% Document Info dictionary. Version is taken from -dPDFX (default 3).
+% ---------------------------------------------------------------------------
+systemdict /PDFX known { systemdict /PDFX get } { 3 } ifelse
+
+dup 1 eq {
+  [ /GTS_PDFXVersion (PDF/X-1a:2001)
+    /Title (Title)
+    /Trapped /False
+  /DOCINFO pdfmark
+} if
+dup 3 eq {
+  [ /GTS_PDFXVersion (PDF/X-3:2002)
+    /Title (Title)
+    /Trapped /False
+  /DOCINFO pdfmark
+} if
+4 eq {
+  [ /GTS_PDFXVersion (PDF/X-4)
+    /Title (Title)
+    /Trapped /False
+  /DOCINFO pdfmark
+} if
+
+% ---------------------------------------------------------------------------
+% ICC profile path. MUST be defined before the embed block.
+% Adjust this path so it matches where the file actually lives.
+% ---------------------------------------------------------------------------
+%%%% /ICCProfile (Build/assets/color-profiles/ISOcoated_v2_300_eci.icc) def
+
+% ---------------------------------------------------------------------------
+% Embed the ICC profile as a stream object named {icc_PDFX}.
+% FOGRA39 / ISO Coated v2 300% is a 4-component CMYK profile, so /N is 4.
+% ---------------------------------------------------------------------------
+currentdict /ICCProfile known {
+  [/_objdef {icc_PDFX} /type /stream /OBJ pdfmark
+  [{icc_PDFX} <<
+    /N 4
+  >> /PUT pdfmark
+  [{icc_PDFX} ICCProfile (r) file /PUT pdfmark
+} if
+
+% ---------------------------------------------------------------------------
+% OutputIntent dictionary.
+% ---------------------------------------------------------------------------
+[/_objdef {OutputIntent_PDFX} /type /dict /OBJ pdfmark
+[{OutputIntent_PDFX} <<
+  /Type /OutputIntent
+  /S /GTS_PDFX
+  /OutputCondition (ISO Coated v2 300% (ECI))
+  /OutputConditionIdentifier (FOGRA39)
+  /Info (ISO Coated v2 300% (ECI))
+  /RegistryName (http://www.color.org)
+  currentdict /ICCProfile known {
+    /DestOutputProfile {icc_PDFX}
+  } if
+>> /PUT pdfmark
+[{Catalog} <</OutputIntents [ {OutputIntent_PDFX} ] >> /PUT pdfmark
