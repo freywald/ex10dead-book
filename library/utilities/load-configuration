@@ -75,7 +75,7 @@ load_configuration_file() {
 		local joined=""
 		while IFS= read -r value; do
 			[[ -n "$value" ]] && joined+="$value "
-		done < <(jq --raw-output '.captions.default_variants[]? // empty' <<<"$json" || __expression_may_fail)
+		done < <(jq --raw-output '.captions.default_variants[]? // empty' <<<"$json" ||__expression_may_fail)
 		joined="${joined%" "}"
 		# ensure 100 is present and first
 		joined="${joined//"100"/}"

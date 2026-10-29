@@ -23,41 +23,41 @@ function build_pdf() {
 	while (($# > 0 )); do
 		if [[ "$1" == "--finalize" ]]; then
 			: #@todo
-			shift || __expression_may_fail
+			shift ||__expression_may_fail
 		elif [[ "$1" == "--configuration-file" ]]; then
 			if [[ -z "${2-}" ]]; then
 				__error "--configuration-file requires a path"
 				local_exit_failsafe
 			fi
 			configuration_files+=("$2")
-			shift 2 || __expression_may_fail
+			shift 2 ||__expression_may_fail
 		elif [[ "$1" == "--configuration-file="* ]]; then
 			if [[ -z "${1#--configuration-file=}" ]]; then
 				__error "--configuration-file requires a path"
 				local_exit_failsafe
 			fi
 			configuration_files+=("${1#--configuration-file=}")
-			shift || __expression_may_fail
+			shift ||__expression_may_fail
 		elif [[ "$1" == "--build-for-language" ]]; then
 			if [[ -z "${2-}" ]]; then
 				__error "--build-for-language requires a language"
 				local_exit_failsafe
 			fi
 			build_for_language="$2"
-			shift 2 || __expression_may_fail
+			shift 2 ||__expression_may_fail
 		elif [[ "$1" == "--build-for-language="* ]]; then
 			if [[ -z "${1#--build-for-language=}" ]]; then
 				__error "--build-for-language requires a language"
 				local_exit_failsafe
 			fi
 			build_for_language="${1#--build-for-language=}"
-			shift || __expression_may_fail
+			shift ||__expression_may_fail
 		elif [[ "$1" == "--force" || "$1" == "--force-overwrite" ]]; then
 			force_overwrite=true
-			shift || __expression_may_fail
+			shift ||__expression_may_fail
 		else
 			arguments+=("$1")
-			shift || __expression_may_fail
+			shift ||__expression_may_fail
 		fi
 	done
 
@@ -81,7 +81,7 @@ function build_pdf() {
 	fi
 
 	__verbose "loading configuration file %s" "$default_configuration_file"
-	load_configuration_file "$default_configuration_file" || local_exit_failsafe
+	load_configuration_file "$default_configuration_file"
 
 	local configuration_file
 	for configuration_file in "${configuration_files[@]}"; do
@@ -90,8 +90,13 @@ function build_pdf() {
 			__error "configuration file %s does not exist" "$configuration_file"
 			local_exit_failsafe
 		fi
-		load_configuration_file "$configuration_file" || local_exit_failsafe
+		load_configuration_file "$configuration_file"
 	done
+
+	if [[ -z "$temporary_directory" || ! -d "$temporary_directory" || ! -f "$temporary_directory/TEMPORARY_DIRECTORY__FILES_WILL_BE_DELETED_HERE" ]]; then
+		__error "temporary directory must exist, flag file TEMPORARY_DIRECTORY__FILES_WILL_BE_DELETED_HERE must exist and configuration path cannot be empty. Value: %s" "$temporary_directory"
+		local_exit_failsafe
+	fi
 
 	# unit conversion
 	mm_per_inch="25.4"
@@ -160,11 +165,10 @@ function build_pdf() {
 
 	# Cleanup on exit
 	cleanup() {
-		#[[ -d "$temporary_directory/" ]] && rm --recursive --force -- "$temporary_directory/"
-		:
+		[[ -d "$temporary_directory/" ]] && rm --recursive --force -- "$temporary_directory/"
 	}
 
-	trap cleanup EXIT
+	trap "cleanup" "EXIT"
 
 	mkdir --parents -- "$temporary_directory/"
 
@@ -299,6 +303,11 @@ function build_pdf() {
 	done
 
 	mkdir --parents -- "$(dirname -- "$build_print_pdf_result_cover")"
+	mkdir --parents -- "$(dirname -- "$build_print_pdf_result_pdfa_with_cover")"
+	mkdir --parents -- "$(dirname -- "$build_print_pdf_result_pdfa_without_cover")"
+	mkdir --parents -- "$(dirname -- "$build_print_pdf_result_pdfx_with_cover")"
+	mkdir --parents -- "$(dirname -- "$build_print_pdf_result_pdfx_without_cover")"
+
 	input_basename="$(basename -- "$build_print_pdf_input_file")"
 
 	cp -- "$build_print_pdf_input_file" "$temporary_directory/$input_basename.pdf"
@@ -484,7 +493,7 @@ function build_pdf() {
 	echo
 	__info "Done. Final file: %s" "$pdf_file_to_verify"
 
-	#[[ -d "$temporary_directory/" ]] && rm --recursive --force -- "$temporary_directory/"
+	[[ -d "$temporary_directory/" ]] && rm --recursive --force -- "$temporary_directory/"
 
 	__info "[%s] done." "__$__current_script_name"
 }

@@ -1,0 +1,42 @@
+# name=sourcetree_datafile_format
+# type=url
+https://github.com/freywald/sourcetree-datafile-format
+
+# type=apt
+icc-profiles
+
+# type=apt
+icc-profiles-free
+
+# type=apt
+cpdf
+
+# type=apt
+pdftk-java
+
+# type=apt
+qpdf
+
+# type=apt
+libimage-exiftool-perl
+
+# type=apt
+python3-pikepdf
+
+# type=apt
+pikepdf-doc
+
+# type=apt
+imagemagick
+
+# type=apt
+python3
+
+# type=apt
+python3-minimal
+
+# type=apt
+yq
+
+# type=apt
+jq
