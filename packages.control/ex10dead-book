@@ -1,0 +1,13 @@
+#!/bin/bash
+
+function ex10dead_book_setup() {
+	__info "setting up ex10dead_book"
+
+	cd "$__ex10dead_book_library_path/"
+
+	echo "$PWD"
+
+	__success "setting up ex10dead_book"
+}
+
+register_handler "ex10dead_book" "ex10dead_book_setup"
