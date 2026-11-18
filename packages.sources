@@ -1,46 +1,46 @@
 # name=ex10dead_common_library
-# type=url
+# _type=package
 https://github.com/freywald/ex10dead-common-library
 
 # name=sourcetree_datafile_format
-# type=url
+# _type=package
 https://github.com/freywald/sourcetree-datafile-format
 
-# type=apt
-icc-profiles
+# _type=requirement
+# apt=icc-profiles
 
-# type=apt
-icc-profiles-free
+# _type=requirement
+# apt=icc-profiles-free
 
-# type=apt
-cpdf
+# _type=requirement
+# apt=cpdf
 
-# type=apt
-pdftk-java
+# _type=requirement
+# apt=pdftk-java
 
-# type=apt
-qpdf
+# _type=requirement
+# apt=qpdf
 
-# type=apt
-libimage-exiftool-perl
+# _type=requirement
+# apt=libimage-exiftool-perl
 
-# type=apt
-python3-pikepdf
+# _type=requirement
+# apt=python3-pikepdf
 
-# type=apt
-pikepdf-doc
+# _type=requirement
+# apt=pikepdf-doc
 
-# type=apt
-imagemagick
+# _type=requirement
+# apt=imagemagick
 
-# type=apt
-python3
+# _type=requirement
+# apt=python3
 
-# type=apt
-python3-minimal
+# _type=requirement
+# apt=python3-minimal
 
-# type=apt
-yq
+# _type=requirement
+# apt=yq
 
-# type=apt
-jq
+# _type=requirement
+# apt=jq
